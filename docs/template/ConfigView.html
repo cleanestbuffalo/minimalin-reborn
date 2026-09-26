@@ -104,6 +104,7 @@
     <ToggleWithItemColor toggleLabel="Use rainbow minute hand" toggleValue="{{ rainbow_mode }}" colorItemValue="{{ minute_hand_color }}" colorItemLabel="Minute hand color" footer="Overrides color selection for the minute hand" toggleFirst/>
     <ItemColor color="{{ time_color }}" label="Numbers and ticks color"/>
     <ItemColor color="{{ background_color }}" label="Background color"/>
+    <ItemColor color="{{ info_color }}" label="Complications color"/>
     {{/if}}
     <div class="section">
       <div>Day / Night</div>
@@ -124,9 +125,6 @@
     <div class="section">
       <div>Complications</div>
     </div>
-    {{#if !bw }}
-    <ItemColor color="{{ info_color }}" label="{{ day_night_enabled ? 'Night color' : 'Color' }}"/>
-    {{/if}}
     <Toggle label="Date" value="{{ date_displayed }}" inverted/>
     <Toggle value="{{ weather_enabled }}" label="Weather"/>
     {{#if weather_enabled}}
