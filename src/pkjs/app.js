@@ -54,12 +54,19 @@ var Weather = function(pebble){
     return char.charCodeAt(0);
   };
 
+  // Open-Meteo returns local ISO times ("2026-09-26T06:58") when timezone=auto;
+  // the watch wants minutes since midnight.
+  var minutesOfDay = function(iso) {
+    var match = /T(\d{2}):(\d{2})/.exec(iso || '');
+    return match ? parseInt(match[1], 10) * 60 + parseInt(match[2], 10) : null;
+  };
+
   var fetchWeather = function(latitude, longitude) {
     var req = new XMLHttpRequest();
     // timezone=auto so the daily high/low cover the local day, not a UTC one.
     var url = BASE_URL + '?latitude=' + latitude + '&longitude=' + longitude +
       '&current=temperature_2m,weather_code,is_day' +
-      '&daily=temperature_2m_max,temperature_2m_min&forecast_days=1&timezone=auto';
+      '&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset&forecast_days=1&timezone=auto';
     debug('fetchWeather requesting:', url);
     req.open('GET', url, true);
     req.onload = function () {
@@ -79,6 +86,15 @@ var Weather = function(pebble){
             // Sent as a pair; the watch only shows the range when it has both.
             data['AppKeyWeatherHigh'] = Math.round(daily.temperature_2m_max[0]);
             data['AppKeyWeatherLow'] = Math.round(daily.temperature_2m_min[0]);
+          }
+          if (daily && daily.sunrise && daily.sunset) {
+            // Sent as a pair; drives the watch's day/night color theme.
+            var sunrise = minutesOfDay(daily.sunrise[0]);
+            var sunset = minutesOfDay(daily.sunset[0]);
+            if (sunrise !== null && sunset !== null) {
+              data['AppKeySunrise'] = sunrise;
+              data['AppKeySunset'] = sunset;
+            }
           }
           debug('fetchWeather success, sending:', data);
           Pebble.sendAppMessage(data);
@@ -126,7 +142,7 @@ Pebble.addEventListener('ready', function (e) {
 
 
 Pebble.addEventListener('showConfiguration', function() {
-  var URL = 'https://lanrat.github.io/minimalin-reborn/';
+  var URL = 'https://cleanestbuffalo.github.io/minimalin-reborn/';
   var config = Config('config');
   var params = config.load();
   params.platform = Pebble.getActiveWatchInfo().platform;
@@ -157,7 +173,13 @@ Pebble.addEventListener('webviewclosed', function(e) {
       military_time: 'AppKeyMilitaryTime',
       quiet_time_visible: 'AppKeyQuietTimeVisible',
       extra_detail: 'AppKeyExtraDetail',
-      distance_unit: 'AppKeyDistanceUnit'
+      distance_unit: 'AppKeyDistanceUnit',
+      day_night_enabled: 'AppKeyDayNightEnabled',
+      day_background_color: 'AppKeyDayBackgroundColor',
+      day_minute_hand_color: 'AppKeyDayMinuteHandColor',
+      day_hour_hand_color: 'AppKeyDayHourHandColor',
+      day_time_color: 'AppKeyDayTimeColor',
+      day_info_color: 'AppKeyDayInfoColor'
     };
     var dict = { AppKeyConfig: 1 };
     for(var key in mapping){

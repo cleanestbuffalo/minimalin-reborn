@@ -37,7 +37,15 @@ typedef enum {
   AppKeyWeatherHigh,
   AppKeyWeatherLow,
   AppKeyExtraDetail,
-  AppKeyDistanceUnit
+  AppKeyDistanceUnit,
+  AppKeySunrise,
+  AppKeySunset,
+  AppKeyDayNightEnabled,
+  AppKeyDayBackgroundColor,
+  AppKeyDayMinuteHandColor,
+  AppKeyDayHourHandColor,
+  AppKeyDayTimeColor,
+  AppKeyDayInfoColor
 } AppKey;
 
 typedef enum {
@@ -54,6 +62,9 @@ typedef struct {
   int8_t high;
   int8_t low;
   uint8_t has_range;
+  // Local sunrise/sunset in minutes since midnight; both 0 until the first fetch.
+  int16_t sunrise;
+  int16_t sunset;
 } __attribute__((__packed__)) Weather;
 
 typedef struct {
@@ -115,10 +126,60 @@ static void mark_dirty_minute_hand_layer();
 static void fetch_health(Context * const context);
 static void update_watch_info_layer_visibility();
 
+// Day/night theme. Between sunrise and sunset the face uses the Day* palette
+// from the config (light background, dark hands by default); otherwise the
+// regular colors, which the config page presents as the night palette.
+#define DEFAULT_SUNRISE (7 * 60)
+#define DEFAULT_SUNSET (19 * 60)
+static bool s_daytime;
+
+static bool is_daytime(const tm * const time){
+  if(!config_get_bool(s_config, ConfigKeyDayNightEnabled)){
+    return false;
+  }
+  int sunrise = s_context.weather.sunrise;
+  int sunset = s_context.weather.sunset;
+  if(sunrise == 0 && sunset == 0){
+    sunrise = DEFAULT_SUNRISE;
+    sunset = DEFAULT_SUNSET;
+  }
+  const int now = time->tm_hour * 60 + time->tm_min;
+  return now >= sunrise && now < sunset;
+}
+
+// Every color lookup for a themed key goes through here instead of the config.
+static GColor theme_color(const ConfigKey key){
+  if(s_daytime){
+    switch(key){
+      case ConfigKeyBackgroundColor: return config_get_color(s_config, ConfigKeyDayBackgroundColor);
+      case ConfigKeyMinuteHandColor: return config_get_color(s_config, ConfigKeyDayMinuteHandColor);
+      case ConfigKeyHourHandColor: return config_get_color(s_config, ConfigKeyDayHourHandColor);
+      case ConfigKeyTimeColor: return config_get_color(s_config, ConfigKeyDayTimeColor);
+      case ConfigKeyInfoColor: return config_get_color(s_config, ConfigKeyDayInfoColor);
+      default: break;
+    }
+  }
+  return config_get_color(s_config, key);
+}
+
 static void update_current_time() {
   const time_t temp = time(NULL);
   s_current_time = localtime(&temp);
   s_context.time = s_current_time;
+}
+
+// Re-evaluate day vs night and repaint everything if it flipped. `force` repaints
+// regardless, for when a configured color changed underneath the theme.
+static void apply_theme(const bool force){
+  const bool daytime = is_daytime(s_current_time);
+  if(!force && daytime == s_daytime){
+    return;
+  }
+  s_daytime = daytime;
+  window_set_background_color(s_main_window, theme_color(ConfigKeyBackgroundColor));
+  if(s_root_layer){
+    layer_mark_dirty(s_root_layer);
+  }
 }
 
 #ifdef SCREENSHOT
@@ -179,7 +240,7 @@ static void config_info_color_updated(DictionaryIterator * iter, Tuple * tuple){
 
 static void config_background_color_updated(DictionaryIterator * iter, Tuple * tuple){
   config_set_int(s_config, ConfigKeyBackgroundColor, tuple->value->int32);
-  window_set_background_color(s_main_window, config_get_color(s_config, ConfigKeyBackgroundColor));
+  apply_theme(true);
 }
 
 static void config_time_color_updated(DictionaryIterator * iter, Tuple * tuple){
@@ -198,6 +259,21 @@ static void config_hour_hand_color_updated(DictionaryIterator * iter, Tuple * tu
 static void config_minute_hand_color_updated(DictionaryIterator * iter, Tuple * tuple){
   config_set_int(s_config, ConfigKeyMinuteHandColor, tuple->value->int32);
   mark_dirty_minute_hand_layer();
+}
+
+// Shared by the day/night toggle and every day color: store the value under its
+// config key, then repaint in whichever palette now applies.
+static void config_day_night_updated(DictionaryIterator * iter, Tuple * tuple){
+  switch(tuple->key){
+    case AppKeyDayNightEnabled: config_set_bool(s_config, ConfigKeyDayNightEnabled, tuple->value->int8); break;
+    case AppKeyDayBackgroundColor: config_set_int(s_config, ConfigKeyDayBackgroundColor, tuple->value->int32); break;
+    case AppKeyDayMinuteHandColor: config_set_int(s_config, ConfigKeyDayMinuteHandColor, tuple->value->int32); break;
+    case AppKeyDayHourHandColor: config_set_int(s_config, ConfigKeyDayHourHandColor, tuple->value->int32); break;
+    case AppKeyDayTimeColor: config_set_int(s_config, ConfigKeyDayTimeColor, tuple->value->int32); break;
+    case AppKeyDayInfoColor: config_set_int(s_config, ConfigKeyDayInfoColor, tuple->value->int32); break;
+    default: return;
+  }
+  apply_theme(true);
 }
 
 static void config_refresh_rate_updated(DictionaryIterator * iter, Tuple * tuple){
@@ -306,6 +382,13 @@ static void weather_requested_callback(DictionaryIterator * iter, Tuple * tuple)
       s_context.weather.low = low_tuple->value->int8;
     }
   }
+  const Tuple * const sunrise_tuple = dict_find(iter, AppKeySunrise);
+  const Tuple * const sunset_tuple = dict_find(iter, AppKeySunset);
+  if(sunrise_tuple && sunset_tuple){
+    s_context.weather.sunrise = sunrise_tuple->value->int16;
+    s_context.weather.sunset = sunset_tuple->value->int16;
+    apply_theme(false);
+  }
   persist_write_data(PersistKeyWeather, &s_context.weather, sizeof(Weather));
   text_block_mark_dirty(s_weather_info);
   quadrants_update(s_quadrants, s_current_time);
@@ -407,7 +490,7 @@ static GPoint merged_time_point_visible(const tm * const time){
 static void hour_time_update_proc(TextBlock * block){
   const Context * const context = (Context *) text_block_get_context(block);
   const Config * const config = context->config;
-  const GColor color = config_get_color(s_config, ConfigKeyTimeColor);
+  const GColor color = theme_color(ConfigKeyTimeColor);
   char buffer[] = "00:00";
   const int hour = context->time->tm_hour;
   const int hour_mod_12 = hour % 12;
@@ -427,8 +510,7 @@ static void hour_time_update_proc(TextBlock * block){
 
 static void minute_time_update_proc(TextBlock * block){
   const Context * const context = (Context *) text_block_get_context(block);
-  const Config * const config = context->config;
-  const GColor color = config_get_color(config, ConfigKeyTimeColor);
+  const GColor color = theme_color(ConfigKeyTimeColor);
   char buffer[] = "00";
   const int min = context->time->tm_min;
   if(times_merged(context->time)){
@@ -447,7 +529,7 @@ static void date_info_update_proc(TextBlock * block){
   const Context * const context = (Context *) text_block_get_context(block);
   const Config * const config = context->config;
   if(config_get_bool(config, ConfigKeyDateDisplayed)){
-    const GColor date_color = config_get_color(config, ConfigKeyInfoColor);
+    const GColor date_color = theme_color(ConfigKeyInfoColor);
     char buffer[] = "00";
     snprintf(buffer, sizeof(buffer), "%d", context->time->tm_mday);
     text_block_set_text(block, buffer, date_color);
@@ -484,6 +566,23 @@ static void mark_dirty_minute_hand_layer(){
   layer_set_hidden((Layer*)s_rainbow_hand_layer, !rainbow_mode);
 }
 
+// The minute hand doubles as a battery gauge: it is drawn solid from the centre
+// out to the current charge level, and hollow (outline only) beyond it. 100%
+// charge therefore looks exactly like the stock solid hand.
+#define MINUTE_HAND_HOLLOW_WIDTH (MINUTE_HAND_WIDTH - 2)
+// Pull the hollowed-out section back from the tip so the hand keeps a closed end cap.
+#define MINUTE_HAND_TIP_CAP (MINUTE_HAND_WIDTH / 2)
+
+// Map 0-100% onto the hand length outside the centre circle, so that even a
+// nearly-flat battery still shows a visible sliver of fill past the hub.
+static int minute_hand_fill_radius(){
+  int percent = s_context.charge_state.charge_percent;
+  if(percent < 0){ percent = 0; }
+  if(percent > 100){ percent = 100; }
+  const int span = MINUTE_HAND_RADIUS - CENTER_CIRCLE_RADIUS;
+  return CENTER_CIRCLE_RADIUS + span * percent / 100;
+}
+
 static void update_minute_hand_layer(Layer *layer, GContext * ctx){
   if(!config_get_bool(s_config, ConfigKeyRainbowMode)){
     const float start_angle = angle(270, 360);
@@ -491,8 +590,18 @@ static void update_minute_hand_layer(Layer *layer, GContext * ctx){
     const float hand_angle = minute_angle - start_angle * (100 - s_animation_percent) / 100;
     const GPoint hand_end = gpoint_on_circle(s_center, hand_angle, MINUTE_HAND_RADIUS);
     graphics_context_set_stroke_width(ctx, MINUTE_HAND_WIDTH);
-    graphics_context_set_stroke_color(ctx, config_get_color(s_config, ConfigKeyMinuteHandColor));
+    graphics_context_set_stroke_color(ctx, theme_color(ConfigKeyMinuteHandColor));
     graphics_draw_line(ctx, s_center, hand_end);
+
+    const int fill_radius = minute_hand_fill_radius();
+    const int hollow_radius = MINUTE_HAND_RADIUS - MINUTE_HAND_TIP_CAP;
+    if(fill_radius < hollow_radius){
+      const GPoint fill_end = gpoint_on_circle(s_center, hand_angle, fill_radius);
+      const GPoint hollow_end = gpoint_on_circle(s_center, hand_angle, hollow_radius);
+      graphics_context_set_stroke_width(ctx, MINUTE_HAND_HOLLOW_WIDTH);
+      graphics_context_set_stroke_color(ctx, theme_color(ConfigKeyBackgroundColor));
+      graphics_draw_line(ctx, fill_end, hollow_end);
+    }
   }
 }
 
@@ -504,12 +613,12 @@ static void update_hour_hand_layer(Layer * layer, GContext * ctx){
   const float hand_angle = rainbow_mode ? hour_angle : hour_angle - start_angle * (100 - s_animation_percent) / 100;
   const GPoint hand_end = gpoint_on_circle(s_center, hand_angle, HOUR_HAND_RADIUS);
   graphics_context_set_stroke_width(ctx, HOUR_HAND_WIDTH);
-  graphics_context_set_stroke_color(ctx, config_get_color(s_config, ConfigKeyHourHandColor));
+  graphics_context_set_stroke_color(ctx, theme_color(ConfigKeyHourHandColor));
   graphics_draw_line(ctx, s_center, hand_end);
 }
 
 static void update_center_circle_layer(Layer * layer, GContext * ctx){
-  const GColor color = config_get_bool(s_config, ConfigKeyRainbowMode) ? GColorVividViolet : config_get_color(s_config, ConfigKeyHourHandColor);
+  const GColor color = config_get_bool(s_config, ConfigKeyRainbowMode) ? GColorVividViolet : theme_color(ConfigKeyHourHandColor);
   graphics_context_set_fill_color(ctx, color);
   graphics_fill_circle(ctx, s_center, CENTER_CIRCLE_RADIUS);
 }
@@ -522,7 +631,7 @@ static void draw_tick(GContext *ctx, const int index){
 
 static void tick_layer_update_callback(Layer *layer, GContext *graphic_ctx) {
   const Context * const context = * (Context**) layer_get_data(layer);
-  graphics_context_set_stroke_color(graphic_ctx, config_get_color(context->config, ConfigKeyTimeColor));
+  graphics_context_set_stroke_color(graphic_ctx, theme_color(ConfigKeyTimeColor));
   graphics_context_set_stroke_width(graphic_ctx, TICK_WIDTH);
   const tm * const time = context->time;
   draw_tick(graphic_ctx, time->tm_hour % 12);
@@ -585,7 +694,7 @@ static void weather_info_update_proc(TextBlock * block){
 #endif
   }
 #endif
-  const GColor info_color = config_get_color(s_config, ConfigKeyInfoColor);
+  const GColor info_color = theme_color(ConfigKeyInfoColor);
   text_block_set_text(block, info_buffer, info_color);
 #ifdef HIGH_DPI_INFO
   // Empty when the setting is off or the forecast is missing, which is how the
@@ -600,20 +709,20 @@ static void send_weather_request_callback(void * context){
   const int expiration =  s_context.weather.timestamp + timeout;
   const bool almost_expired = time(NULL) > expiration;
   const bool can_update_weather = (s_context.reset_weather || almost_expired) && s_js_ready;
+  // Requested even with the weather block disabled: the same fetch carries the
+  // sunrise/sunset times the day/night theme runs on.
   if(can_update_weather){
-    if(config_get_bool(s_config, ConfigKeyWeatherEnabled)){
-      DictionaryIterator *out_iter;
-      AppMessageResult result = app_message_outbox_begin(&out_iter);
-      if(result == APP_MSG_OK) {
-        const int value = 1;
-        dict_write_int(out_iter, AppKeyWeatherRequest, &value, sizeof(int), true);
-        result = app_message_outbox_send();
-        if(result != APP_MSG_OK) {
-          schedule_weather_request(5000);
-        }
-      } else {
+    DictionaryIterator *out_iter;
+    AppMessageResult result = app_message_outbox_begin(&out_iter);
+    if(result == APP_MSG_OK) {
+      const int value = 1;
+      dict_write_int(out_iter, AppKeyWeatherRequest, &value, sizeof(int), true);
+      result = app_message_outbox_send();
+      if(result != APP_MSG_OK) {
         schedule_weather_request(5000);
       }
+    } else {
+      schedule_weather_request(5000);
     }
   }
 }
@@ -665,7 +774,7 @@ static void watch_info_update_proc(TextBlock * block){
   if(quiet_time_visible){
     strncat(info_buffer, "q", 2);
   }
-  const GColor info_color = config_get_color(s_config, ConfigKeyInfoColor);
+  const GColor info_color = theme_color(ConfigKeyInfoColor);
   text_block_set_text(block, info_buffer, info_color);
 }
 
@@ -673,14 +782,13 @@ static void watch_info_update_proc(TextBlock * block){
 
 static void steps_info_update_proc(TextBlock * block){
   const Context * const context = (Context *) text_block_get_context(block);
-  const Config * const config = context->config;
 #ifdef SCREENSHOT
   const int steps = 6234;  // mock step count renders as "y6.2k" for screenshots
 #else
   const int steps = context->steps;
 #endif
   char step_text[16] = {0};
-  const GColor info_color = config_get_color(config, ConfigKeyInfoColor);
+  const GColor info_color = theme_color(ConfigKeyInfoColor);
   if(steps > 10000){
     snprintf(step_text, sizeof(step_text), "y%dk", steps / 1000);
   }else if(steps > 1000){
@@ -693,13 +801,13 @@ static void steps_info_update_proc(TextBlock * block){
   // Distance walked today, under the step count. "km" and "mi" are letters, so
   // like the weekday this line is system Gothic rather than Nupe.
   char distance_text[12] = {0};
-  if(config_get_bool(config, ConfigKeyExtraDetail)){
+  if(config_get_bool(context->config, ConfigKeyExtraDetail)){
 #ifdef SCREENSHOT
     const int meters = 4823;  // mock distance renders as "4.8 km"
 #else
     const int meters = context->distance_meters;
 #endif
-    const bool in_miles = config_get_int(config, ConfigKeyDistanceUnit) == Miles;
+    const bool in_miles = config_get_int(context->config, ConfigKeyDistanceUnit) == Miles;
     // Tenths in integer math, rounded rather than truncated: half a unit is
     // added before the divide, so 4823m reads 3.0 mi and not 2.9. Distances are
     // never negative, so the rounding needs no sign handling. Using 1609 rather
@@ -748,6 +856,10 @@ static void battery_handler(BatteryChargeState charge){
   s_context.charge_state = charge;
   update_watch_info_layer_visibility();
   text_block_mark_dirty(s_watch_info);
+  // Guarded: this handler also runs during window_load, before the hand layers exist.
+  if(s_minute_hand_layer){
+    mark_dirty_minute_hand_layer();
+  }
 }
 
 static void step_handler(HealthEventType event, void * context){
@@ -774,6 +886,7 @@ static void tick_handler(struct tm *tick_time, TimeUnits units_changed){
 #ifdef SCREENSHOT
   screenshot_apply_theme();
 #endif
+  apply_theme(false);
 
   layer_mark_dirty(s_hour_hand_layer);
   layer_mark_dirty(s_tick_layer);
@@ -838,7 +951,8 @@ static void main_window_load(Window *window) {
 #ifdef SCREENSHOT
   screenshot_apply_theme();
 #endif
-  window_set_background_color(window, config_get_color(s_config, ConfigKeyBackgroundColor));
+  s_daytime = is_daytime(s_current_time);
+  window_set_background_color(window, theme_color(ConfigKeyBackgroundColor));
 
   s_quadrants = quadrants_create(s_center, HOUR_HAND_RADIUS, MINUTE_HAND_RADIUS);
   s_date_info = quadrants_add_text_block(s_quadrants, s_root_layer, s_font, Low, s_current_time);
@@ -983,6 +1097,12 @@ static void init() {
     { AppKeyMilitaryTime, config_military_time_updated },
     { AppKeyHealthEnabled, config_health_enabled_updated },
     { AppKeyBatteryDisplayedAt, config_battery_displayed_at_updated },
+    { AppKeyDayNightEnabled, config_day_night_updated },
+    { AppKeyDayBackgroundColor, config_day_night_updated },
+    { AppKeyDayMinuteHandColor, config_day_night_updated },
+    { AppKeyDayHourHandColor, config_day_night_updated },
+    { AppKeyDayTimeColor, config_day_night_updated },
+    { AppKeyDayInfoColor, config_day_night_updated },
 #ifdef HIGH_DPI_INFO
     { AppKeyExtraDetail, config_extra_detail_updated },
     { AppKeyDistanceUnit, config_distance_unit_updated }

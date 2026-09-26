@@ -97,6 +97,7 @@
       </div>
     </div>
     <div class="section">
+      <div>{{ day_night_enabled && !bw ? 'Night colors' : '' }}</div>
     </div>
     {{#if !bw }}
     <ItemColor color="{{ hour_hand_color }}" label="Hour hand color"/>
@@ -104,13 +105,27 @@
     <ItemColor color="{{ time_color }}" label="Numbers and ticks color"/>
     <ItemColor color="{{ background_color }}" label="Background color"/>
     {{/if}}
+    <div class="section">
+      <div>Day / Night</div>
+    </div>
+    <Toggle label="Day colors from sunrise to sunset" value="{{ day_night_enabled }}" footer="Sunrise and sunset come from your phone's location. The colors above are used at night."/>
+    {{#if day_night_enabled && !bw }}
+    <div intro-outro='slide'>
+      <Tabs source="{{ previewSource }}" value="{{ preview_day }}" header="Preview"/>
+      <ItemColor color="{{ day_hour_hand_color }}" label="Day hour hand color"/>
+      <ItemColor color="{{ day_minute_hand_color }}" label="Day minute hand color"/>
+      <ItemColor color="{{ day_time_color }}" label="Day numbers and ticks color"/>
+      <ItemColor color="{{ day_background_color }}" label="Day background color"/>
+      <ItemColor color="{{ day_info_color }}" label="Day complications color"/>
+    </div>
+    {{/if}}
     <Toggle label="Vibrate every full hour" value="{{ vibrate_on_the_hour }}" footer="{{ platform === 'aplite' ? '' : 'Off during sleep tracked with Pebble Health' }}" />
     <Toggle label="24h format" value="{{ military_time }}"/>
     <div class="section">
       <div>Complications</div>
     </div>
     {{#if !bw }}
-    <ItemColor color="{{ info_color }}" label="Color"/>
+    <ItemColor color="{{ info_color }}" label="{{ day_night_enabled ? 'Night color' : 'Color' }}"/>
     {{/if}}
     <Toggle label="Date" value="{{ date_displayed }}" inverted/>
     <Toggle value="{{ weather_enabled }}" label="Weather"/>
@@ -445,20 +460,26 @@
          { label: "40 min", value: 40 }
        ];
      },
+     previewSource: function(){
+       return [
+         { label: "Night", value: false },
+         { label: "Day", value: true }
+       ];
+     },
      infoColor: function(){
-       return this.color(this.get('info_color'))
+       return this.color(this.get(this.previewKey('info_color')))
      },
      timeColor: function(){
-       return this.color(this.get('time_color'))
+       return this.color(this.get(this.previewKey('time_color')))
      },
      hourHandColor: function(){
-       return this.color(this.get('hour_hand_color'))
+       return this.color(this.get(this.previewKey('hour_hand_color')))
      },
      minuteHandColor: function(){
-       return this.color(this.get('minute_hand_color'))
+       return this.color(this.get(this.previewKey('minute_hand_color')))
      },
      backgroundColor: function(){
-       return this.color(this.get('background_color'))
+       return this.color(this.get(this.previewKey('background_color')))
      },
      btBatteryText: function(){
        var info;
@@ -502,6 +523,11 @@
       return this.get("highDpi") && this.get("extra_detail");
      }
    },
+   // The preview shows the day palette while the Day tab is picked.
+   previewKey: function(key){
+     var day = this.get('preview_day') && this.get('day_night_enabled') && !this.get('bw');
+     return day ? 'day_' + key : key;
+   },
    color: function(value){
      var hex = value.toString(16);
      return '#' + new Array(6 - hex.length + 1).join('0') + hex;
@@ -543,9 +569,22 @@
      this.on('ToggleWithItemColor.clicked', function(event){
        this.set('selected_theme', false);
      });
-     this.on('ItemColor.setColor', function(){
-       this.set('selected_theme', false);
-     });
+     // Themes hold the night palette only, so editing a day color keeps the
+     // selected theme; editing either palette flips the preview to it.
+     this.observe('hour_hand_color minute_hand_color time_color background_color info_color', function(){
+       var theme = this.currentTheme();
+       var ractive = this;
+       var matches = theme && ['hour_hand_color', 'minute_hand_color', 'time_color', 'background_color', 'info_color'].every(function(key){
+         return theme[key] === undefined || theme[key] === ractive.get(key);
+       });
+       if(!matches){
+         this.set('selected_theme', false);
+       }
+       this.set('preview_day', false);
+     }, { init: false });
+     this.observe('day_hour_hand_color day_minute_hand_color day_time_color day_background_color day_info_color', function(){
+       this.set('preview_day', true);
+     }, { init: false });
      this.on('reset-defaults', function() {
        var themes = this.get('defaults').themes;
        var themesCopy = JSON.parse(JSON.stringify(themes));
@@ -607,6 +646,12 @@
          quiet_time_visible: this.get('quiet_time_visible'),
          extra_detail: this.get('extra_detail'),
          distance_unit: this.get('distance_unit'),
+         day_night_enabled: this.get('day_night_enabled'),
+         day_hour_hand_color: this.get('day_hour_hand_color'),
+         day_minute_hand_color: this.get('day_minute_hand_color'),
+         day_time_color: this.get('day_time_color'),
+         day_background_color: this.get('day_background_color'),
+         day_info_color: this.get('day_info_color'),
          themes: this.get('themes')
        };
        var returnTo = query('return_to', 'pebblejs://close#');

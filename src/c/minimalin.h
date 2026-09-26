@@ -23,10 +23,16 @@ typedef enum {
   ConfigKeyBatteryDisplayedAt,
   ConfigKeyQuietTimeVisible,
   ConfigKeyExtraDetail,
-  ConfigKeyDistanceUnit
+  ConfigKeyDistanceUnit,
+  ConfigKeyDayNightEnabled,
+  ConfigKeyDayBackgroundColor,
+  ConfigKeyDayMinuteHandColor,
+  ConfigKeyDayHourHandColor,
+  ConfigKeyDayTimeColor,
+  ConfigKeyDayInfoColor
 } ConfigKey;
 
-#define CONF_SIZE 19
+#define CONF_SIZE 25
 
 
 #ifndef CONFIG_BLUETOOTH_ICON
@@ -73,5 +79,12 @@ ConfValue CONF_DEFAULTS[CONF_SIZE] = {
   // persisted blob from the defaults, so appending is what keeps existing
   // watches working.
   { .key = ConfigKeyExtraDetail, .type = BoolConf, .value = { .boolean = true } },
-  { .key = ConfigKeyDistanceUnit, .type = IntConf, .value = { .integer = CONFIG_DISTANCE_UNIT } }
+  { .key = ConfigKeyDistanceUnit, .type = IntConf, .value = { .integer = CONFIG_DISTANCE_UNIT } },
+  // Daytime (sunrise to sunset) palette; the colors above are the night palette.
+  { .key = ConfigKeyDayNightEnabled, .type = BoolConf, .value = { .boolean = true } },
+  { .key = ConfigKeyDayBackgroundColor, .type = ColorConf, .value = { .integer = 0xffffff } },
+  { .key = ConfigKeyDayMinuteHandColor, .type = ColorConf, .value = { .integer = 0x000000 } },
+  { .key = ConfigKeyDayHourHandColor, .type = ColorConf, .value = { .integer = PBL_IF_COLOR_ELSE(0xff0000, 0x000000) } },
+  { .key = ConfigKeyDayTimeColor, .type = ColorConf, .value = { .integer = PBL_IF_COLOR_ELSE(0x555555, 0x000000) } },
+  { .key = ConfigKeyDayInfoColor, .type = ColorConf, .value = { .integer = PBL_IF_COLOR_ELSE(0x555555, 0x000000) } }
 };
